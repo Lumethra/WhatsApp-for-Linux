@@ -37,7 +37,8 @@ fn main() {
         // ---------------- WEBVIEW SETUP ----------------
         let manager = UserContentManager::new();
         manager.register_script_message_handler("external");
-        manager.register_script_message_handler("badge"); 
+        manager.register_script_message_handler("badge");
+        manager.register_script_message_handler("theme");
 
         let settings = Settings::builder()
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
@@ -48,6 +49,7 @@ fn main() {
             .settings(&settings)
             .build();
 
+        // ---------------- JS BRIDGE + DARK MODE DETECTION ----------------
         let js_bridge = r#"
             (function() {
                 const notify = (title, options) => {
@@ -83,9 +85,27 @@ fn main() {
                 if (navigator.permissions) {
                     const oldQuery = navigator.permissions.query;
                     navigator.permissions.query = function(spec) {
-                        return spec.name === 'notifications' ? Promise.resolve({ state: 'granted', onchange: null }) : oldQuery.apply(this, arguments);
+                        return spec.name === 'notifications'
+                            ? Promise.resolve({ state: 'granted', onchange: null })
+                            : oldQuery.apply(this, arguments);
                     };
                 }
+
+                // ---- Detect WhatsApp dark mode ----
+                const sendTheme = () => {
+                    const isDark = document.body.classList.contains("dark");
+                    window.webkit.messageHandlers.theme.postMessage(isDark ? "dark" : "light");
+                };
+
+                // Run once
+                sendTheme();
+
+                // Watch for body.class changes
+                new MutationObserver(sendTheme).observe(document.body, {
+                    attributes: true,
+                    attributeFilter: ["class"]
+                });
+
             })();
         "#;
 
@@ -102,23 +122,20 @@ fn main() {
             .application(app)
             .default_width(1100)
             .default_height(800)
-            .decorated(false) // REMOVE SYSTEM TITLE BAR
+            .decorated(false)
             .build();
 
-        // ---------------- CUSTOM TITLE BAR (GTK3) ----------------
+        // ---------------- CUSTOM TITLE BAR ----------------
         let titlebar = GtkBox::new(Orientation::Horizontal, 8);
         titlebar.set_widget_name("custom-titlebar");
         titlebar.set_size_request(-1, 32);
 
-        // Force the bar to be visible
         let title_label = gtk::Label::new(Some("WhatsApp"));
         titlebar.pack_start(&title_label, false, false, 0);
 
-        // Make sure GTK3 doesn't collapse it
         titlebar.set_hexpand(true);
         titlebar.set_vexpand(false);
 
-        // Drag window
         titlebar.connect_button_press_event(
             clone!(@weak window => @default-return Inhibit(false), move |_, event| {
                 if event.button() == 1 {
@@ -134,14 +151,13 @@ fn main() {
             }),
         );
 
-        // Buttons (GTK3 uses with_label)
         let minimize = Button::with_label("🗕");
         let maximize = Button::with_label("🗗︎");
         let close = Button::with_label("🗙︎");
 
-        minimize.style_context().add_class("title-minimize"); 
-        maximize.style_context().add_class("title-maximize"); 
-        close.style_context().add_class("title-close"); 
+        minimize.style_context().add_class("title-minimize");
+        maximize.style_context().add_class("title-maximize");
+        close.style_context().add_class("title-close");
 
         minimize.connect_clicked(clone!(@weak window => move |_| window.iconify()));
         maximize.connect_clicked(clone!(@weak window => move |_| {
@@ -157,7 +173,7 @@ fn main() {
 
         titlebar.pack_end(&right_box, false, false, 0);
 
-        // ---------------- LAYOUT (TITLEBAR + WEBVIEW) ----------------
+        // ---------------- LAYOUT ----------------
         let layout = GtkBox::new(Orientation::Vertical, 0);
         layout.pack_start(&titlebar, false, false, 0);
         layout.pack_start(&webview, true, true, 0);
@@ -186,6 +202,23 @@ fn main() {
                     window_clone.set_title(&format!("WhatsApp ({})", count));
                 } else {
                     window_clone.set_title("WhatsApp");
+                }
+            }
+        });
+
+        // ---------------- THEME HANDLER (DARK/LIGHT) ----------------
+        let titlebar_clone = titlebar.clone();
+        manager.connect_script_message_received(Some("theme"), move |_, result| {
+            if let Some(js_value) = result.js_value() {
+                let theme = js_value.to_string();
+                let ctx = titlebar_clone.style_context();
+
+                if theme == "dark" {
+                    ctx.add_class("dark-titlebar");
+                    ctx.remove_class("light-titlebar");
+                } else {
+                    ctx.add_class("light-titlebar");
+                    ctx.remove_class("dark-titlebar");
                 }
             }
         });

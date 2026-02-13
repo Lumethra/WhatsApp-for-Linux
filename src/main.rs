@@ -1,10 +1,18 @@
 use gtk::prelude::*;
-use gtk::{Application, ApplicationWindow};
+use gtk::{
+    Application, ApplicationWindow, Button, Box as GtkBox, Orientation,
+    CssProvider, StyleContext,
+};
+use glib::clone;
+use gtk::gdk;
+use gtk::gdk::Screen;
+
 use webkit2gtk::traits::*;
 use webkit2gtk::{
     WebView, UserContentManager, UserScript, UserContentInjectedFrames, 
     UserScriptInjectionTime, JavascriptResult, Settings
 };
+
 use notify_rust::Notification;
 use serde_json::Value;
 
@@ -14,6 +22,19 @@ fn main() {
         .build();
 
     app.connect_activate(|app| {
+        // ---------------- CSS LOADING (GTK3) ----------------
+        let provider = CssProvider::new();
+        provider
+            .load_from_data(include_bytes!("style.css"))
+            .expect("Failed to load CSS");
+
+        StyleContext::add_provider_for_screen(
+            &Screen::default().expect("No screen"),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+
+        // ---------------- WEBVIEW SETUP ----------------
         let manager = UserContentManager::new();
         manager.register_script_message_handler("external");
         manager.register_script_message_handler("badge"); 
@@ -29,25 +50,32 @@ fn main() {
 
         let js_bridge = r#"
             (function() {
-                // --- Notifications ---
                 const notify = (title, options) => {
                     if (window.lastNotification === title + options?.body) return;
                     window.lastNotification = title + options?.body;
                     setTimeout(() => { window.lastNotification = null; }, 2000);
                     window.webkit.messageHandlers.external.postMessage(JSON.stringify({ title, body: options?.body || "" }));
                 };
-                window.Notification = function(title, options) { notify(title, options); return { close: () => {}, onclick: null, addEventListener: () => {} }; };
+
+                window.Notification = function(title, options) {
+                    notify(title, options);
+                    return { close: () => {}, onclick: null, addEventListener: () => {} };
+                };
                 window.Notification.permission = 'granted';
+
                 if (window.ServiceWorkerRegistration) {
-                    window.ServiceWorkerRegistration.prototype.showNotification = function(title, options) { notify(title, options); return Promise.resolve(); };
+                    window.ServiceWorkerRegistration.prototype.showNotification = function(title, options) {
+                        notify(title, options);
+                        return Promise.resolve();
+                    };
                 }
 
-                // --- Badge Counter (Title Observer) ---
                 const updateBadge = () => {
                     const match = document.title.match(/\((\d+)\)/);
                     const count = match ? match[1] : "0";
                     window.webkit.messageHandlers.badge.postMessage(count);
                 };
+
                 const observer = new MutationObserver(updateBadge);
                 observer.observe(document.querySelector('title'), { childList: true });
                 updateBadge();
@@ -69,6 +97,74 @@ fn main() {
             &[],
         ));
 
+        // ---------------- WINDOW SETUP ----------------
+        let window = ApplicationWindow::builder()
+            .application(app)
+            .default_width(1100)
+            .default_height(800)
+            .decorated(false) // REMOVE SYSTEM TITLE BAR
+            .build();
+
+        // ---------------- CUSTOM TITLE BAR (GTK3) ----------------
+        let titlebar = GtkBox::new(Orientation::Horizontal, 8);
+        titlebar.set_widget_name("custom-titlebar");
+        titlebar.set_size_request(-1, 32);
+
+        // Force the bar to be visible
+        let title_label = gtk::Label::new(Some("WhatsApp"));
+        titlebar.pack_start(&title_label, false, false, 0);
+
+        // Make sure GTK3 doesn't collapse it
+        titlebar.set_hexpand(true);
+        titlebar.set_vexpand(false);
+
+        // Drag window
+        titlebar.connect_button_press_event(
+            clone!(@weak window => @default-return Inhibit(false), move |_, event| {
+                if event.button() == 1 {
+                    let (root_x, root_y) = event.root();
+                    window.begin_move_drag(
+                        event.button() as i32,
+                        root_x as i32,
+                        root_y as i32,
+                        event.time(),
+                    );
+                }
+                Inhibit(false)
+            }),
+        );
+
+        // Buttons (GTK3 uses with_label)
+        let minimize = Button::with_label("🗕");
+        let maximize = Button::with_label("🗗︎");
+        let close = Button::with_label("🗙︎");
+
+        minimize.style_context().add_class("title-minimize"); 
+        maximize.style_context().add_class("title-maximize"); 
+        close.style_context().add_class("title-close"); 
+
+        minimize.connect_clicked(clone!(@weak window => move |_| window.iconify()));
+        maximize.connect_clicked(clone!(@weak window => move |_| {
+            if window.is_maximized() { window.unmaximize(); }
+            else { window.maximize(); }
+        }));
+        close.connect_clicked(clone!(@weak window => move |_| window.close()));
+
+        let right_box = GtkBox::new(Orientation::Horizontal, 4);
+        right_box.pack_start(&minimize, false, false, 0);
+        right_box.pack_start(&maximize, false, false, 0);
+        right_box.pack_start(&close, false, false, 0);
+
+        titlebar.pack_end(&right_box, false, false, 0);
+
+        // ---------------- LAYOUT (TITLEBAR + WEBVIEW) ----------------
+        let layout = GtkBox::new(Orientation::Vertical, 0);
+        layout.pack_start(&titlebar, false, false, 0);
+        layout.pack_start(&webview, true, true, 0);
+
+        window.add(&layout);
+
+        // ---------------- NOTIFICATION HANDLER ----------------
         manager.connect_script_message_received(Some("external"), |_, result: &JavascriptResult| {
             if let Some(js_value) = result.js_value() {
                 if let Ok(data) = serde_json::from_str::<Value>(&js_value.to_string()) {
@@ -81,19 +177,9 @@ fn main() {
             }
         });
 
-        webview.load_uri("https://web.whatsapp.com");
-
-        let window = ApplicationWindow::builder()
-            .application(app)
-            .title("WhatsApp")
-            .default_width(1100)
-            .default_height(800)
-            .child(&webview)
-            .build();
-
-        // Handler 2: Badge Counter
+        // ---------------- BADGE COUNTER ----------------
         let window_clone = window.clone();
-        manager.connect_script_message_received(Some("badge"), move |_, result: &JavascriptResult| {
+        manager.connect_script_message_received(Some("badge"), move |_, result| {
             if let Some(js_value) = result.js_value() {
                 let count = js_value.to_string();
                 if count != "0" {
@@ -104,20 +190,22 @@ fn main() {
             }
         });
 
-        // -------- KEYBOARD SHORTCUTS ---------
+        // ---------------- KEYBOARD SHORTCUTS ----------------
         let wv_clone = webview.clone();
         window.connect_key_press_event(move |_, key_event| {
             let key = key_event.keyval();
-            let state = key_event.state();
-            let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let ctrl = key_event.state().contains(gdk::ModifierType::CONTROL_MASK);
 
-            if key == gtk::gdk::keys::constants::r && ctrl {
+            if key == gdk::keys::constants::r && ctrl {
                 wv_clone.reload();
-                gtk::Inhibit(true) 
+                Inhibit(true)
             } else {
-                gtk::Inhibit(false) 
+                Inhibit(false)
             }
         });
+
+        // ---------------- LOAD WHATSAPP ----------------
+        webview.load_uri("https://web.whatsapp.com");
 
         window.show_all();
     });

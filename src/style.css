@@ -1,0 +1,30 @@
+#custom-titlebar {
+    background: #161717;
+    min-height: 32px;
+    padding: 0 0 0 15px;
+}
+
+#custom-titlebar button {
+    background: transparent;
+    border: none;
+    color: #ccc;
+    font-size: 14px;
+    padding: 4px 10px;
+}
+
+#custom-titlebar .title-minimize {
+    padding-bottom: 8px;
+}
+
+#custom-titlebar .title-maximize {
+    padding-top: 8px;
+}
+
+#custom-titlebar button:hover {
+    background: #2b2d31;
+    color: white;
+}
+
+#custom-titlebar button:active {
+    background: #3a3c40;
+}

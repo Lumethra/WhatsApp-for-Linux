@@ -93,6 +93,21 @@ fn main() {
             .child(&webview)
             .build();
 
+        // -------- KEYBOARD SHORTCUTS ---------
+        let wv_clone = webview.clone();
+        window.connect_key_press_event(move |_, key_event| {
+            let key = key_event.keyval();
+            let state = key_event.state();
+            let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+
+            if key == gtk::gdk::keys::constants::r && ctrl {
+                wv_clone.reload();
+                gtk::Inhibit(true) 
+            } else {
+                gtk::Inhibit(false) 
+            }
+        });
+
         window.show_all();
     });
 

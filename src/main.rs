@@ -1,7 +1,7 @@
 use gtk::prelude::*;
 use gtk::{
     Application, ApplicationWindow, Button, Box as GtkBox, Orientation,
-    CssProvider, StyleContext,
+    CssProvider, StyleContext, Overlay,
 };
 use glib::clone;
 use gtk::gdk;
@@ -151,6 +151,9 @@ fn main() {
             }),
         );
 
+        // ---------------- WINDOW BUTTONS + HIDE BUTTON ----------------
+        let hide_btn = Button::with_label("▴"); // hide title bar
+
         let minimize = Button::with_label("🗕");
         let maximize = Button::with_label("🗗︎");
         let close = Button::with_label("🗙︎");
@@ -167,18 +170,58 @@ fn main() {
         close.connect_clicked(clone!(@weak window => move |_| window.close()));
 
         let right_box = GtkBox::new(Orientation::Horizontal, 4);
+        right_box.pack_start(&hide_btn, false, false, 0);
         right_box.pack_start(&minimize, false, false, 0);
         right_box.pack_start(&maximize, false, false, 0);
         right_box.pack_start(&close, false, false, 0);
 
         titlebar.pack_end(&right_box, false, false, 0);
 
+        // ---------------- OVERLAY SHOW BUTTON ----------------
+        let overlay = Overlay::new();
+        overlay.add(&webview);
+
+        let show_btn = Button::with_label("▼");
+        show_btn.set_halign(gtk::Align::Center);
+        show_btn.set_valign(gtk::Align::Start);
+        show_btn.style_context().add_class("show-titlebar");
+
+        show_btn.set_no_show_all(true); 
+        show_btn.hide();
+
+        overlay.add_overlay(&show_btn);
+
         // ---------------- LAYOUT ----------------
         let layout = GtkBox::new(Orientation::Vertical, 0);
         layout.pack_start(&titlebar, false, false, 0);
-        layout.pack_start(&webview, true, true, 0);
+        layout.pack_start(&overlay, true, true, 0);
 
         window.add(&layout);
+
+        // ---------------- HIDE / SHOW LOGIC ----------------
+        let titlebar_for_hide = titlebar.clone();
+        let show_btn_for_hide = show_btn.clone();
+        let show_btn_ctx = show_btn.style_context();
+        hide_btn.connect_clicked(move |_| {
+            titlebar_for_hide.hide();
+            show_btn_for_hide.show();
+            show_btn_ctx.add_class("opacity");
+
+            glib::timeout_add_local(
+                std::time::Duration::from_secs(1),
+                clone!(@weak show_btn_ctx => @default-return glib::Continue(false), move || {
+                    show_btn_ctx.remove_class("opacity");
+                    glib::Continue(false)
+                }),
+            );
+        });
+
+        let titlebar_for_show = titlebar.clone();
+        let show_btn_for_show = show_btn.clone();
+        show_btn.connect_clicked(move |_| {
+            show_btn_for_show.hide();
+            titlebar_for_show.show();
+        });
 
         // ---------------- NOTIFICATION HANDLER ----------------
         manager.connect_script_message_received(Some("external"), |_, result: &JavascriptResult| {
@@ -212,13 +255,18 @@ fn main() {
             if let Some(js_value) = result.js_value() {
                 let theme = js_value.to_string();
                 let ctx = titlebar_clone.style_context();
+                let show_btn_ctx = show_btn.style_context();
 
                 if theme == "dark" {
                     ctx.add_class("dark-titlebar");
                     ctx.remove_class("light-titlebar");
+                    show_btn_ctx.add_class("dark-titlebar");
+                    show_btn_ctx.remove_class("light-titlebar");
                 } else {
                     ctx.add_class("light-titlebar");
                     ctx.remove_class("dark-titlebar");
+                    show_btn_ctx.add_class("light-titlebar");
+                    show_btn_ctx.remove_class("dark-titlebar");
                 }
             }
         });

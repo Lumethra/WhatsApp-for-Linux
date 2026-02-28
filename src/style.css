@@ -53,3 +53,46 @@
 #custom-titlebar.light-titlebar button:active {
     background: #cccccc;
 }
+
+.show-titlebar {
+    opacity: 0.15;
+    transition: opacity 400ms;
+    margin: 8px;
+    background: transparent;
+    border: none;
+    font-size: 14px;
+    padding: 4px 10px;
+}
+
+.show-titlebar.dark-titlebar {
+    color: #ccc;
+}
+
+.show-titlebar.light-titlebar {
+    color: #333;
+}
+
+.show-titlebar.dark-titlebar:hover {
+    background: #2b2d31;
+    color: white;
+    opacity: 1.0;
+}
+
+.show-titlebar.dark-titlebar:active {
+    background: #3a3c40;
+}
+
+.show-titlebar.light-titlebar:hover {
+    background: #e6e6e6;
+    color: black;
+    opacity: 1.0;
+}
+
+.show-titlebar.light-titlebar:active {
+    background: #cccccc;
+}
+
+.opacity {
+    opacity: 1.0;
+    transition: opacity 400ms;
+}

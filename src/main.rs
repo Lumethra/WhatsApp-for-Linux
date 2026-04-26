@@ -13,7 +13,7 @@ use webkit2gtk::traits::*;
 use webkit2gtk::{
     WebView, WebContext, UserContentManager, UserScript, UserContentInjectedFrames,
     UserScriptInjectionTime, JavascriptResult, Settings, HardwareAccelerationPolicy,
-    ProcessModel, CacheModel,
+    CacheModel,
 };
 
 use notify_rust::Notification;
@@ -41,7 +41,6 @@ fn main() {
         // ---------------- WEBVIEW SETUP ----------------
         let ctx = WebContext::default().unwrap();
         ctx.set_cache_model(CacheModel::WebBrowser);
-        ctx.set_process_model(ProcessModel::SharedSecondaryProcess);
 
         let manager = UserContentManager::new();
         manager.register_script_message_handler("external");
@@ -52,9 +51,7 @@ fn main() {
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
             .javascript_can_access_clipboard(true)
             .enable_smooth_scrolling(true)
-            .enable_dns_prefetching(true)
             .enable_page_cache(true)
-            .enable_offline_web_application_cache(true)
             .enable_html5_database(true)
             .enable_html5_local_storage(true)
             .hardware_acceleration_policy(HardwareAccelerationPolicy::Always)
@@ -189,6 +186,8 @@ fn main() {
 
         // ---------------- WINDOW BUTTONS + HIDE BUTTON ----------------
         let hide_btn = Button::with_label("▴"); // hide title bar
+        let unload_btn = Button::with_label("◼");
+        unload_btn.set_tooltip_text(Some("Unload tab (free RAM)"));
 
         let minimize = Button::with_label("🗕");
         let maximize = Button::with_label("🗗︎");
@@ -205,8 +204,23 @@ fn main() {
         }));
         close.connect_clicked(clone!(@weak window => move |_| window.close()));
 
+        let is_unloaded = std::cell::Cell::new(false);
+        unload_btn.connect_clicked(clone!(@weak webview => move |btn| {
+            if is_unloaded.get() {
+                webview.load_uri("https://web.whatsapp.com");
+                btn.set_label("◼");
+                btn.set_tooltip_text(Some("Unload tab (free RAM)"));
+            } else {
+                webview.terminate_web_process();
+                btn.set_label("▶");
+                btn.set_tooltip_text(Some("Reload WhatsApp"));
+            }
+            is_unloaded.set(!is_unloaded.get());
+        }));
+
         let right_box = GtkBox::new(Orientation::Horizontal, 4);
         right_box.pack_start(&hide_btn, false, false, 0);
+        right_box.pack_start(&unload_btn, false, false, 0);
         right_box.pack_start(&minimize, false, false, 0);
         right_box.pack_start(&maximize, false, false, 0);
         right_box.pack_start(&close, false, false, 0);

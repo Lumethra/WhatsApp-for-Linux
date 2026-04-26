@@ -9,8 +9,9 @@ use gtk::gdk::Screen;
 
 use webkit2gtk::traits::*;
 use webkit2gtk::{
-    WebView, UserContentManager, UserScript, UserContentInjectedFrames, 
-    UserScriptInjectionTime, JavascriptResult, Settings
+    WebView, WebContext, UserContentManager, UserScript, UserContentInjectedFrames,
+    UserScriptInjectionTime, JavascriptResult, Settings, HardwareAccelerationPolicy,
+    ProcessModel, CacheModel,
 };
 
 use notify_rust::Notification;
@@ -35,6 +36,10 @@ fn main() {
         );
 
         // ---------------- WEBVIEW SETUP ----------------
+        let ctx = WebContext::default().unwrap();
+        ctx.set_cache_model(CacheModel::WebBrowser);
+        ctx.set_process_model(ProcessModel::SharedSecondaryProcess);
+
         let manager = UserContentManager::new();
         manager.register_script_message_handler("external");
         manager.register_script_message_handler("badge");
@@ -42,9 +47,18 @@ fn main() {
 
         let settings = Settings::builder()
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+            .javascript_can_access_clipboard(true)
+            .enable_smooth_scrolling(true)
+            .enable_dns_prefetching(true)
+            .enable_page_cache(true)
+            .enable_offline_web_application_cache(true)
+            .enable_html5_database(true)
+            .enable_html5_local_storage(true)
+            .hardware_acceleration_policy(HardwareAccelerationPolicy::Always)
             .build();
 
         let webview = WebView::builder()
+            .web_context(&ctx)
             .user_content_manager(&manager)
             .settings(&settings)
             .build();
@@ -92,27 +106,45 @@ fn main() {
                 }
 
                 // ---- Detect WhatsApp dark mode ----
+                let lastTheme = { value: null };
                 const sendTheme = () => {
+                    if (!document.body) return;
                     const isDark = document.body.classList.contains("dark");
-                    window.webkit.messageHandlers.theme.postMessage(isDark ? "dark" : "light");
+                    const theme = isDark ? "dark" : "light";
+                    if (theme === lastTheme.value) return;
+                    if (theme === "light" && lastTheme.value === null) return;
+                    lastTheme.value = theme;
+                    window.webkit.messageHandlers.theme.postMessage(theme);
                 };
 
-                // Run once
-                sendTheme();
+                // Only check theme when the page is idle — not during loading/navigation
+                let debounceTimer = null;
+                const sendThemeWhenIdle = () => {
+                    clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(sendTheme, 500);
+                };
 
-                // Watch for body.class changes
-                new MutationObserver(sendTheme).observe(document.body, {
-                    attributes: true,
-                    attributeFilter: ["class"]
-                });
+                const startThemeWatch = () => {
+                    if (!document.body) {
+                        setTimeout(startThemeWatch, 200);
+                        return;
+                    }
+                    // Wait for initial load to fully settle
+                    setTimeout(sendTheme, 2000);
+                    new MutationObserver(sendThemeWhenIdle).observe(document.body, {
+                        attributes: true,
+                        attributeFilter: ["class"]
+                    });
+                };
+                startThemeWatch();
 
             })();
         "#;
 
         manager.add_script(&UserScript::new(
             js_bridge,
-            UserContentInjectedFrames::AllFrames,
-            UserScriptInjectionTime::End, 
+            UserContentInjectedFrames::TopFrame,
+            UserScriptInjectionTime::End,
             &[],
             &[],
         ));
@@ -129,6 +161,7 @@ fn main() {
         let titlebar = GtkBox::new(Orientation::Horizontal, 8);
         titlebar.set_widget_name("custom-titlebar");
         titlebar.set_size_request(-1, 32);
+        titlebar.style_context().add_class("dark-titlebar");
 
         let title_label = gtk::Label::new(Some("WhatsApp"));
         titlebar.pack_start(&title_label, false, false, 0);
@@ -251,22 +284,35 @@ fn main() {
 
         // ---------------- THEME HANDLER (DARK/LIGHT) ----------------
         let titlebar_clone = titlebar.clone();
+        let light_pending = std::rc::Rc::new(std::cell::Cell::new(0u32));
         manager.connect_script_message_received(Some("theme"), move |_, result| {
             if let Some(js_value) = result.js_value() {
-                let theme = js_value.to_string();
+                let raw = js_value.to_string();
+                let theme = raw.trim_matches('"');
                 let ctx = titlebar_clone.style_context();
                 let show_btn_ctx = show_btn.style_context();
 
                 if theme == "dark" {
+                    light_pending.set(light_pending.get().wrapping_add(1));
                     ctx.add_class("dark-titlebar");
                     ctx.remove_class("light-titlebar");
                     show_btn_ctx.add_class("dark-titlebar");
                     show_btn_ctx.remove_class("light-titlebar");
                 } else {
-                    ctx.add_class("light-titlebar");
-                    ctx.remove_class("dark-titlebar");
-                    show_btn_ctx.add_class("light-titlebar");
-                    show_btn_ctx.remove_class("dark-titlebar");
+                    let token = light_pending.get().wrapping_add(1);
+                    light_pending.set(token);
+                    let lp = light_pending.clone();
+                    let ctx = ctx.clone();
+                    let show_btn_ctx = show_btn_ctx.clone();
+                    glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+                        if lp.get() == token {
+                            ctx.add_class("light-titlebar");
+                            ctx.remove_class("dark-titlebar");
+                            show_btn_ctx.add_class("light-titlebar");
+                            show_btn_ctx.remove_class("dark-titlebar");
+                        }
+                        glib::Continue(false)
+                    });
                 }
             }
         });

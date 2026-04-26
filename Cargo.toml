@@ -6,7 +6,9 @@ edition = "2024"
 [dependencies]
 gtk = "0.16"
 glib = "0.16"
+gio = "0.16"
 webkit2gtk = { version = "0.19", features = ["v2_34"] }
 serde = "1"
 serde_json = "1"
 notify-rust = "4.11"
+base64 = "0.22"

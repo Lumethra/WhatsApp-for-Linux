@@ -1,11 +1,13 @@
 use gtk::prelude::*;
 use gtk::{
     Application, ApplicationWindow, Button, Box as GtkBox, Orientation,
-    CssProvider, StyleContext, Overlay,
+    CssProvider, StyleContext, Overlay, Clipboard,
 };
 use glib::clone;
 use gtk::gdk;
 use gtk::gdk::Screen;
+use gio::prelude::OutputStreamExt;
+use gio::traits::MemoryOutputStreamExt;
 
 use webkit2gtk::traits::*;
 use webkit2gtk::{
@@ -16,6 +18,7 @@ use webkit2gtk::{
 
 use notify_rust::Notification;
 use serde_json::Value;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 fn main() {
     let app = Application::builder()
@@ -319,6 +322,7 @@ fn main() {
 
         // ---------------- KEYBOARD SHORTCUTS ----------------
         let wv_clone = webview.clone();
+        let wv_paste = webview.clone();
         window.connect_key_press_event(move |_, key_event| {
             let key = key_event.keyval();
             let ctrl = key_event.state().contains(gdk::ModifierType::CONTROL_MASK);
@@ -326,6 +330,38 @@ fn main() {
             if key == gdk::keys::constants::r && ctrl {
                 wv_clone.reload();
                 Inhibit(true)
+            } else if key == gdk::keys::constants::v && ctrl {
+                let clipboard = Clipboard::get(&gdk::Atom::intern("CLIPBOARD"));
+                let wv = wv_paste.clone();
+                clipboard.request_image(move |_, pixbuf| {
+                    let Some(pixbuf) = pixbuf else { return };
+                    let stream = gio::MemoryOutputStream::new_resizable();
+                    if pixbuf.save_to_streamv(&stream, "png", &[], gio::Cancellable::NONE).is_ok() {
+                        stream.close(gio::Cancellable::NONE).ok();
+                        let bytes = stream.steal_as_bytes();
+                        let b64 = BASE64.encode(bytes.as_ref());
+                        let js = format!(
+                            r#"(async () => {{
+                                const r = await fetch('data:image/png;base64,{}');
+                                const blob = await r.blob();
+                                const file = new File([blob], 'paste.png', {{ type: 'image/png' }});
+                                const dt = new DataTransfer();
+                                dt.items.add(file);
+                                const input = document.querySelector('[contenteditable="true"][data-tab]');
+                                if (input) {{
+                                    input.focus();
+                                    input.dispatchEvent(new ClipboardEvent('paste', {{
+                                        bubbles: true, cancelable: true, clipboardData: dt
+                                    }}));
+                                }}
+                            }})()"#,
+                            b64
+                        );
+                        wv.run_javascript(&js, gio::Cancellable::NONE, |_| {});
+                    }
+                });
+                // Don't inhibit — let text paste still work if no image
+                Inhibit(false)
             } else {
                 Inhibit(false)
             }

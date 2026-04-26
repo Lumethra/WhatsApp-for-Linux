@@ -9,8 +9,8 @@ use gtk::gdk::Screen;
 
 use webkit2gtk::traits::*;
 use webkit2gtk::{
-    WebView, UserContentManager, UserScript, UserContentInjectedFrames, 
-    UserScriptInjectionTime, JavascriptResult, Settings
+    WebView, UserContentManager, UserScript, UserContentInjectedFrames,
+    UserScriptInjectionTime, JavascriptResult, Settings, HardwareAccelerationPolicy,
 };
 
 use notify_rust::Notification;
@@ -42,6 +42,11 @@ fn main() {
 
         let settings = Settings::builder()
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+            .javascript_can_access_clipboard(true)
+            .enable_media_stream(true)
+            .enable_dns_prefetching(true)
+            .enable_page_cache(true)
+            .hardware_acceleration_policy(HardwareAccelerationPolicy::Always)
             .build();
 
         let webview = WebView::builder()
